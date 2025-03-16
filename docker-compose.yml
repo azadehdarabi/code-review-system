@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  local-llm:
+    image: ghcr.io/huggingface/text-generation-inference:latest
+    ports:
+      - "8080:80"
+    environment:
+      - MODEL_ID=TinyLlama/TinyLlama-1.1B-Chat-v1.0
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+              count: 0
+    networks:
+      - code-review-network
+
+  llm-service:
+    build: ./llm_service
+    ports:
+      - "8000:8000"
+    environment:
+      - LLM_PROVIDER=local
+      - LOCAL_MODEL_URL=http://local-llm:80
+    depends_on:
+      - local-llm
+    networks:
+      - code-review-network
+
+  code-analysis-service:
+    build: ./code_analysis_service
+    ports:
+      - "8001:8000"
+    environment:
+      - LLM_SERVICE_URL=http://llm-service:8000
+    depends_on:
+      - llm-service
+      - redis
+    networks:
+      - code-review-network
+
+  code-analysis-worker:
+    build: ./code_analysis_service
+    command: celery -A app.tasks worker --loglevel=info
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+    networks:
+      - code-review-network
+
+  redis:
+    image: redis:latest
+    ports:
+      - "6379:6379"
+    networks:
+      - code-review-network
+
+networks:
+  code-review-network:
+    driver: bridge 
