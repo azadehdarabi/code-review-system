@@ -1,12 +1,12 @@
 import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import patch
-from app.main import app
+from code_analysis_service.app.main import app
 
 client = TestClient(app)
 
 def test_start_analysis():
-    with patch('app.tasks.clone_repository.delay') as mock_task:
+    with patch('code_analysis_service.app.tasks.clone_repository.delay') as mock_task:
         mock_task.return_value.id = "test_job_id"
         response = client.post(
             "/analyze/start",
@@ -17,7 +17,7 @@ def test_start_analysis():
         assert response.json()["job_id"] == "test_job_id"
 
 def test_analyze_function():
-    with patch('app.code_analyzer.analyze_function') as mock_analyze:
+    with patch('code_analysis_service.app.code_analyzer.analyze_function') as mock_analyze:
         mock_analyze.return_value = ["Add type hints", "Add docstring"]
         response = client.post(
             "/analyze/function",

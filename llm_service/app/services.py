@@ -1,3 +1,5 @@
+import json
+import re
 from abc import ABC, abstractmethod
 from typing import List
 import openai
@@ -9,10 +11,12 @@ from .config import Settings
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
 class LLMProvider(ABC):
     @abstractmethod
     async def analyze_code(self, code: str) -> List[str]:
         pass
+
 
 class OpenAIProvider(LLMProvider):
     def __init__(self, settings: Settings):
@@ -28,7 +32,8 @@ class OpenAIProvider(LLMProvider):
             response = await self.client.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
-                    {"role": "system", "content": "You are a code review expert. Analyze the given Python function and provide a list of suggestions for improvement."},
+                    {"role": "system",
+                     "content": "You are a code review expert. Analyze the given Python function and provide a list of suggestions for improvement."},
                     {"role": "user", "content": f"Please review this Python function:\n\n{code}"}
                 ]
             )
@@ -44,6 +49,7 @@ class OpenAIProvider(LLMProvider):
         except Exception as e:
             logger.error(f"Unexpected error: {str(e)}")
             raise Exception(f"Error analyzing code: {str(e)}")
+
 
 class DeepseekProvider(LLMProvider):
     def __init__(self, settings: Settings):
@@ -61,7 +67,7 @@ class DeepseekProvider(LLMProvider):
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json"
             }
-            
+
             async with httpx.AsyncClient() as client:
                 response = await client.post(
                     self.api_url,
@@ -69,30 +75,32 @@ class DeepseekProvider(LLMProvider):
                     json={
                         "model": "deepseek-chat",
                         "messages": [
-                            {"role": "system", "content": "You are a code review expert. Analyze the given Python function and provide a list of suggestions for improvement."},
+                            {"role": "system",
+                             "content": "You are a code review expert. Analyze the given Python function and provide a list of suggestions for improvement."},
                             {"role": "user", "content": f"Please review this Python function:\n\n{code}"}
                         ],
                         "temperature": 0.7,
                         "max_tokens": 500
                     }
                 )
-                
+
                 if response.status_code != 200:
                     error_msg = f"Deepseek API error: {response.text}"
                     logger.error(error_msg)
                     raise Exception(error_msg)
-                
+
                 logger.info("Successfully received response from Deepseek API")
                 result = response.json()
                 suggestions = result["choices"][0]["message"]["content"].split("\n")
                 return [s.strip("- ") for s in suggestions if s.strip()]
-                
+
         except httpx.HTTPError as e:
             logger.error(f"HTTP error communicating with Deepseek API: {str(e)}")
             raise Exception(f"Failed to connect to Deepseek API: {str(e)}")
         except Exception as e:
             logger.error(f"Error in Deepseek provider: {str(e)}")
             raise Exception(f"Deepseek API error: {str(e)}")
+
 
 class LocalProvider(LLMProvider):
     def __init__(self, settings: Settings):
@@ -102,49 +110,64 @@ class LocalProvider(LLMProvider):
     async def analyze_code(self, code: str) -> List[str]:
         try:
             logger.info("Sending request to Local LLM")
-            prompt = f"""<|system|>You are a code review expert. Analyze the given Python function and provide a list of suggestions for improvement.
+            prompt = f"""You are an AI code reviewer specializing in Python. Your task is to analyze the given function and provide constructive feedback.
 
-<|user|>Please review this Python function:
-
-{code}
-
-Provide your suggestions as a numbered list.
-
-<|assistant|>"""
+            ### Instructions:
+            - Identify code quality improvements (e.g., readability, maintainability, efficiency).
+            - Check for best practices (e.g., type hints, docstrings, meaningful variable names).
+            - Highlight potential bugs or logical errors.
             
+            ### Input Function:
+            ```python
+            {code}
+            ```
+            """
+
             async with httpx.AsyncClient() as client:
                 response = await client.post(
                     f"{self.base_url}/generate",
                     json={
-                        "inputs": prompt,
-                        "parameters": {
-                            "max_new_tokens": 500,
-                            "temperature": 0.7,
-                            "top_p": 0.95,
-                            "return_full_text": False
-                        }
+                        "prompt": prompt
                     }
                 )
-                
+
                 if response.status_code != 200:
                     error_msg = f"Local LLM error: {response.text}"
                     logger.error(error_msg)
                     raise Exception(error_msg)
-                
+
                 logger.info("Successfully received response from Local LLM")
                 result = response.json()
-                
-                # Parse the response into suggestions
+                logger.info(f"Raw LLM response: {result}")  # Log the full response
+
+                if "generated_text" not in result:
+                    logger.error("Missing 'generated_text' in LLM response")
+                    raise Exception("Invalid LLM response format")
+
                 text = result["generated_text"]
-                # Split by newlines and numbers (1., 2., etc.)
-                suggestions = [line.strip() for line in text.split("\n") if line.strip()]
-                # Remove any numbering from the start of lines
-                suggestions = [s.split(".", 1)[1].strip() if "." in s else s for s in suggestions]
+
+                if not isinstance(text, str):
+                    logger.error(f"Expected string response, got: {type(text)}")
+                    raise Exception("Unexpected response format from LLM")
+
+                cleaned_text = ' '.join(text.split())
+
+                # Try to parse the cleaned text as JSON if it's in JSON format
+                try:
+                    import json
+                    json_data = json.loads(cleaned_text)
+                    if "suggestions" in json_data:
+                        suggestions = json_data["suggestions"]
+                    else:
+                        suggestions = [cleaned_text]
+                except json.JSONDecodeError:
+                    suggestions = [cleaned_text]
+
+                logger.info(f"Parsed suggestions: {suggestions}")
                 return suggestions
-                
         except httpx.HTTPError as e:
             logger.error(f"HTTP error communicating with Local LLM: {str(e)}")
             raise Exception(f"Failed to connect to Local LLM: {str(e)}")
         except Exception as e:
             logger.error(f"Error in Local LLM provider: {str(e)}")
-            raise Exception(f"Local LLM error: {str(e)}") 
+            raise Exception(f"Local LLM error: {str(e)}")

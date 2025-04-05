@@ -1,32 +1,29 @@
-from celery import Celery
+from celery.utils.log import get_task_logger
 import git
 import os
-from .config import Settings
+from app.config import Settings
+from celery import Celery
 
 settings = Settings()
 
 # Initialize Celery
 celery_app = Celery('code_analysis', broker=settings.redis_url)
+logger = get_task_logger(__name__)
+
 
 @celery_app.task
 def clone_repository(repo_url: str) -> str:
-    """
-    Clone a GitHub repository to local storage.
-    Returns the job_id which is the Celery task ID.
-    """
+    job_id = celery_app.current_task.request.id
+    repo_path = os.path.join(settings.repo_storage_path, job_id)
+
     try:
-        # Create a unique directory for this repo
-        job_id = celery_app.current_task.request.id
-        repo_path = os.path.join(settings.repo_storage_path, job_id)
-        
-        # Ensure the directory exists
+        logger.info(f"Starting repository clone: {repo_url} -> {repo_path}")
         os.makedirs(repo_path, exist_ok=True)
-        
-        # Clone the repository
-        git.Repo.clone_from(repo_url, repo_path)
-        
+
+        git.Repo.clone_from(repo_url, repo_path, depth=None, multi_options=["--no-single-branch"])
+
+        logger.info(f"Successfully cloned repository: {repo_path}")
         return job_id
     except Exception as e:
-        # Log the error and re-raise
-        celery_app.logger.error(f"Failed to clone repository: {str(e)}")
-        raise 
+        logger.error(f"Cloning failed for {repo_url}: {str(e)}")
+        raise
